@@ -37,11 +37,12 @@ repeat across projects and are risky to reimplement casually.
 ## MVP Scope
 
 - `readCodexAuthFile(codexHome)`.
-- `refreshCodexAccessToken(refreshToken)`.
+- `refreshAccessToken(refreshToken, { fetch })`.
 - `writeCodexAuthFile(codexHome, tokens)`.
 - `createCodexAuthManager({ codexHome, fetch })`.
 - Redaction helpers for logs/errors.
 - Quota request helper with caller-provided `fetch`.
+- Account home helpers for `CODEX_ACCOUNTS_DIR` and `default/auth.json`.
 
 ## Public API Sketch
 
@@ -51,6 +52,32 @@ const accessToken = await auth.getAccessToken();
 const accountId = auth.getAccountId();
 ```
 
+## Implemented API
+
+- `readCodexAuthFile(codexHome)` returns normalized credentials from either
+  native nested Codex auth (`auth_mode: "chatgpt"`, `tokens.*`) or flat imported
+  auth (`access_token`, `refresh_token` at top level).
+- `writeCodexAuthFile(codexHome, tokens)` writes the nested Codex shape, uses a
+  temporary file plus rename, fsyncs best-effort, and sets `0600`.
+- `refreshAccessToken(refreshToken, { fetch, now })` uses OpenAI's Codex OAuth
+  client id and never requires live network in tests because callers can inject
+  `fetch`.
+- `createCodexAuthManager({ codexHome, fetch })` caches credentials, refreshes
+  shortly before JWT expiry, coalesces concurrent refresh calls, writes the
+  refreshed file, and exposes account id/email/plan accessors.
+- `decodeAccountIdFromAccessToken`, `decodeEmailFromToken`,
+  `decodePlanFromToken`, and `decodeCodexTokenMetadata` parse unverified JWT
+  payloads only for non-secret metadata.
+- `getCodexAccountHome`, `getDefaultCodexAccountHome`,
+  `getCodexAuthFilePath`, `getDefaultCodexAuthFilePath`, and
+  `resolveCodexAccountsRoot` encode the local/container account-directory
+  convention.
+- `redactToken`, `redactAuthJson`, and `sanitizeErrorMessage` provide defensive
+  redaction for token fields, bearer strings, JWT-like strings, and known
+  secret values.
+- `fetchCodexQuotaSnapshot` is available for caller-injected quota requests and
+  quota response normalization.
+
 ## Acceptance Criteria
 
 - Tests cover nested Codex `auth_mode: chatgpt` files and flat imported files.
@@ -59,10 +86,20 @@ const accountId = auth.getAccountId();
 - Consumers can inject `fetch` for tests.
 - Docs include local/container deployment patterns.
 
+## Operational Notes
+
+- Runtime services should prefer `codex-runtime/accounts/default/auth.json` or
+  an explicit `CODEX_ACCOUNTS_DIR` over the user's global `~/.codex`.
+- Container deployments should mount the account directory at runtime and never
+  bake OAuth files into images.
+- Fallback credential copies must be copied as files without printing, parsing,
+  logging, or committing contents. Preserve `0600` permissions and restart the
+  service after replacing `auth.json`.
+- Tests and fixtures must use fake token strings only.
+
 ## Milestones
 
 1. Extract auth file parser and redaction tests.
 2. Implement refresh manager with concurrency coalescing.
 3. Add quota helper and docs.
 4. Publish `0.1.0`.
-
