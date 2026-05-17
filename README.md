@@ -139,10 +139,30 @@ need live network access to test quota normalization.
 
 ## Secret Safety
 
+- Never log credentials. Do not log raw `auth.json`, token response bodies,
+  request headers, `URLSearchParams`, caught errors that may embed tokens, or
+  `CodexCredentials` objects before redaction.
 - Errors from refresh and quota requests are sanitized.
 - `redactAuthJson` masks token fields recursively.
 - Tests use fake JWTs and fake refresh tokens only.
 - The package never reads or prints real OAuth tokens by itself.
+
+Use a fake-token testing pattern for all parser, refresh, and manager tests:
+
+```ts
+function fakeJwt(payload: Record<string, unknown>): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode(payload)}.fake-signature`;
+}
+
+writeCodexAuthFile(codexHome, {
+  accessToken: fakeJwt({ exp: 4_102_444_800 }),
+  refreshToken: 'fake-refresh-token',
+});
+```
+
+Do not copy a developer's real `auth.json` into tests. Do not paste real token
+values into snapshots, fixtures, CI variables, or failure output.
 
 ## Development
 

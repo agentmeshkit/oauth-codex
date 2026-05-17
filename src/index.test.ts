@@ -36,6 +36,17 @@ function fakeJwt(payload: Record<string, unknown>): string {
 }
 
 describe('auth.json parsing', () => {
+  it('returns null for malformed auth.json content', () => {
+    const invalidJsonHome = tmpCodexHome();
+    fs.writeFileSync(path.join(invalidJsonHome, 'auth.json'), '{not-json');
+
+    const arrayJsonHome = tmpCodexHome();
+    fs.writeFileSync(path.join(arrayJsonHome, 'auth.json'), '[]');
+
+    expect(readCodexAuthFile(invalidJsonHome)).toBeNull();
+    expect(readCodexAuthFile(arrayJsonHome)).toBeNull();
+  });
+
   it('reads nested chatgpt Codex auth and decodes safe metadata', () => {
     const codexHome = tmpCodexHome();
     const accessToken = fakeJwt({
@@ -68,6 +79,39 @@ describe('auth.json parsing', () => {
       plan: 'plus',
       shape: 'nested-chatgpt',
     });
+  });
+
+  it('returns null when required token fields are missing', () => {
+    const nestedMissingRefreshHome = tmpCodexHome();
+    fs.writeFileSync(
+      path.join(nestedMissingRefreshHome, 'auth.json'),
+      JSON.stringify({
+        auth_mode: 'chatgpt',
+        tokens: { access_token: 'fake-access-only' },
+      }),
+    );
+
+    const nestedMissingAccessHome = tmpCodexHome();
+    fs.writeFileSync(
+      path.join(nestedMissingAccessHome, 'auth.json'),
+      JSON.stringify({
+        auth_mode: 'chatgpt',
+        tokens: { refresh_token: 'fake-refresh-only' },
+      }),
+    );
+
+    const flatMissingRefreshHome = tmpCodexHome();
+    fs.writeFileSync(
+      path.join(flatMissingRefreshHome, 'auth.json'),
+      JSON.stringify({
+        type: 'codex',
+        access_token: 'fake-flat-access-only',
+      }),
+    );
+
+    expect(readCodexAuthFile(nestedMissingRefreshHome)).toBeNull();
+    expect(readCodexAuthFile(nestedMissingAccessHome)).toBeNull();
+    expect(readCodexAuthFile(flatMissingRefreshHome)).toBeNull();
   });
 
   it('reads flat imported Codex auth', () => {
@@ -124,6 +168,48 @@ describe('auth.json writing', () => {
       },
     });
   });
+
+  it('does not retain flat top-level token fields when rewriting existing auth', () => {
+    const codexHome = tmpCodexHome();
+    fs.writeFileSync(
+      path.join(codexHome, 'auth.json'),
+      JSON.stringify({
+        type: 'codex',
+        access_token: 'fake-old-access',
+        refresh_token: 'fake-old-refresh',
+        id_token: 'fake-old-id',
+        account_id: 'acct_old',
+        expires_at: 1_700_000_000_000,
+        email: 'existing@example.test',
+      }),
+    );
+
+    writeCodexAuthFile(codexHome, {
+      accessToken: 'fake-new-access',
+      refreshToken: 'fake-new-refresh',
+      idToken: 'fake-new-id',
+      accountId: 'acct_new',
+      expiresAt: 1_800_000_000_000,
+    });
+
+    const raw = JSON.parse(fs.readFileSync(path.join(codexHome, 'auth.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(raw.access_token).toBeUndefined();
+    expect(raw.refresh_token).toBeUndefined();
+    expect(raw.id_token).toBeUndefined();
+    expect(raw.account_id).toBeUndefined();
+    expect(raw.expires_at).toBeUndefined();
+    expect(raw.tokens).toMatchObject({
+      access_token: 'fake-new-access',
+      refresh_token: 'fake-new-refresh',
+      id_token: 'fake-new-id',
+      account_id: 'acct_new',
+      expires_at: 1_800_000_000_000,
+    });
+  });
 });
 
 describe('refresh', () => {
@@ -142,6 +228,78 @@ describe('refresh', () => {
     await expect(refreshAccessToken(refreshSecret, { fetch: fetchMock })).rejects.not.toThrow(
       refreshSecret,
     );
+  });
+
+  it('redacts token fields from HTTP error bodies', async () => {
+    const refreshSecret = 'fake-refresh-request-secret';
+    const leakedAccess = 'fake-access-from-error-body';
+    const leakedRefresh = 'fake-refresh-from-error-body';
+    const leakedAuthorization = 'fake-authorization-from-error-body';
+    const leakedQuery = 'fake-query-token';
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          error: 'invalid_grant',
+          access_token: leakedAccess,
+          refresh_token: leakedRefresh,
+          authorization: leakedAuthorization,
+          detail: `refresh=${leakedQuery}`,
+        }),
+        { status: 400, statusText: 'Bad Request' },
+      );
+    });
+
+    await expect(refreshAccessToken(refreshSecret, { fetch: fetchMock })).rejects.toThrow(
+      '<redacted>',
+    );
+    await expect(refreshAccessToken(refreshSecret, { fetch: fetchMock })).rejects.not.toThrow(
+      leakedAccess,
+    );
+    await expect(refreshAccessToken(refreshSecret, { fetch: fetchMock })).rejects.not.toThrow(
+      leakedRefresh,
+    );
+    await expect(refreshAccessToken(refreshSecret, { fetch: fetchMock })).rejects.not.toThrow(
+      leakedAuthorization,
+    );
+    await expect(refreshAccessToken(refreshSecret, { fetch: fetchMock })).rejects.not.toThrow(
+      leakedQuery,
+    );
+    await expect(refreshAccessToken(refreshSecret, { fetch: fetchMock })).rejects.not.toThrow(
+      refreshSecret,
+    );
+  });
+
+  it('rejects refresh responses missing required fields without leaking returned token material', async () => {
+    const returnedAccess = 'fake-access-without-refresh';
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        access_token: returnedAccess,
+        expires_in: 3600,
+      }),
+    );
+
+    await expect(refreshAccessToken('fake-refresh-missing-fields', { fetch: fetchMock })).rejects.toThrow(
+      'response missing required fields',
+    );
+    await expect(
+      refreshAccessToken('fake-refresh-missing-fields', { fetch: fetchMock }),
+    ).rejects.not.toThrow(returnedAccess);
+  });
+
+  it('manager returns unexpired tokens without refreshing', async () => {
+    const codexHome = tmpCodexHome();
+    const now = 1_700_000_000_000;
+    const accessToken = fakeJwt({ exp: Math.floor((now + 3_600_000) / 1000) });
+    writeCodexAuthFile(codexHome, {
+      accessToken,
+      refreshToken: 'fake-refresh-unexpired',
+      accountId: 'acct_unexpired',
+    });
+    const fetchMock = vi.fn(async () => Response.json({}));
+    const manager = createCodexAuthManager({ codexHome, fetch: fetchMock, now: () => now });
+
+    await expect(manager.getAccessToken()).resolves.toBe(accessToken);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('coalesces concurrent manager refreshes and writes refreshed credentials', async () => {

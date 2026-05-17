@@ -504,11 +504,11 @@ function redactTokenPatterns(message: string): string {
       '<redacted-jwt>',
     )
     .replace(
-      /"(access_token|refresh_token|id_token|accessToken|refreshToken|idToken|token)"\s*:\s*"[^"]*"/gi,
+      /"(access|refresh|access_token|refresh_token|id_token|accessToken|refreshToken|idToken|token|authorization)"\s*:\s*"[^"]*"/gi,
       '"$1":"<redacted>"',
     )
     .replace(
-      /\b(access_token|refresh_token|id_token|accessToken|refreshToken|idToken|token)=([^&\s]+)/gi,
+      /\b(access|refresh|access_token|refresh_token|id_token|accessToken|refreshToken|idToken|token|authorization)=([^&\s]+)/gi,
       '$1=<redacted>',
     );
 }

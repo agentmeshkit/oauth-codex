@@ -92,10 +92,17 @@ const accountId = auth.getAccountId();
   an explicit `CODEX_ACCOUNTS_DIR` over the user's global `~/.codex`.
 - Container deployments should mount the account directory at runtime and never
   bake OAuth files into images.
+- Never log credentials. Logs and diagnostics must avoid raw `auth.json`
+  content, OAuth request bodies, response bodies, headers, and credential
+  objects unless they have passed through `redactAuthJson` or
+  `sanitizeErrorMessage`.
 - Fallback credential copies must be copied as files without printing, parsing,
   logging, or committing contents. Preserve `0600` permissions and restart the
   service after replacing `auth.json`.
-- Tests and fixtures must use fake token strings only.
+- Tests and fixtures must use fake token strings only. Prefer locally generated
+  fake JWTs with minimal claims plus fake refresh-token strings; never use a
+  developer's real `auth.json`, real tokens, CI secrets, or snapshots containing
+  credential material.
 
 ## Milestones
 
