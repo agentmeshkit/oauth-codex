@@ -85,6 +85,9 @@ const accountId = auth.getAccountId();
 - Error messages never include token material.
 - Consumers can inject `fetch` for tests.
 - Docs include local/container deployment patterns.
+- Docs include a compact AI-agent integration contract that points agents to the
+  auth manager, quota helper, redaction helpers, Codex runner pairing, and
+  fake-token testing rules.
 
 ## Operational Notes
 
@@ -103,6 +106,9 @@ const accountId = auth.getAccountId();
   fake JWTs with minimal claims plus fake refresh-token strings; never use a
   developer's real `auth.json`, real tokens, CI secrets, or snapshots containing
   credential material.
+- `docs/AI_AGENT_INTEGRATION.md` is the canonical compact guide for automated
+  coding agents. Keep it short, API-accurate, and focused on safe integration
+  rather than product background.
 
 ## Milestones
 

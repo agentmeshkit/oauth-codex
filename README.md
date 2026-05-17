@@ -31,7 +31,40 @@ const accountId = auth.getAccountId();
 ```
 
 `createCodexAuthManager` refreshes shortly before JWT expiry. Concurrent refresh
-calls are coalesced so only one OAuth request updates the file.
+calls are coalesced so only one OAuth request updates the file. Pass the same
+`codexHome` to any Codex runner process that should use this account.
+
+For quota/status UI, reuse the manager instead of reading tokens yourself:
+
+```ts
+import { fetchCodexQuotaSnapshot } from '@agentmeshkit/oauth-codex';
+
+const quota = await fetchCodexQuotaSnapshot({ auth, fetch });
+```
+
+All network access is caller-injected through `fetch`, so unit tests can use
+fake responses and do not need live OpenAI or ChatGPT calls.
+
+## Public Helpers
+
+Most callers only need:
+
+- `resolveCodexAccountsRoot()` to locate `CODEX_ACCOUNTS_DIR` or the local
+  `codex-runtime/accounts` fallback.
+- `getDefaultCodexAccountHome(accountsRoot)` or
+  `getCodexAccountHome(accountsRoot, label)` to resolve a Codex home directory.
+- `createCodexAuthManager({ codexHome, fetch })` to read and refresh tokens.
+- `fetchCodexQuotaSnapshot({ auth, fetch })` to normalize quota data.
+
+Lower-level helpers are available for importers and diagnostics:
+
+- `readCodexAuthFile(codexHome)` normalizes supported `auth.json` shapes.
+- `writeCodexAuthFile(codexHome, tokens)` writes nested Codex auth atomically.
+- `refreshAccessToken(refreshToken, { fetch })` performs a single refresh.
+- `redactAuthJson(value)` and `sanitizeErrorMessage(message, secrets)` prepare
+  diagnostic output without token material.
+- `decodeCodexTokenMetadata(...)` and related decode helpers parse unverified
+  JWT payloads only for non-secret metadata such as account id, email, and plan.
 
 ## Supported auth.json Shapes
 
@@ -144,6 +177,8 @@ need live network access to test quota normalization.
   `CodexCredentials` objects before redaction.
 - Errors from refresh and quota requests are sanitized.
 - `redactAuthJson` masks token fields recursively.
+- Treat JWT metadata decoding as convenience only. The package does not verify
+  token signatures and callers must not use decoded claims for authorization.
 - Tests use fake JWTs and fake refresh tokens only.
 - The package never reads or prints real OAuth tokens by itself.
 
@@ -163,6 +198,9 @@ writeCodexAuthFile(codexHome, {
 
 Do not copy a developer's real `auth.json` into tests. Do not paste real token
 values into snapshots, fixtures, CI variables, or failure output.
+
+For AI-agent-oriented integration rules, see
+[`docs/AI_AGENT_INTEGRATION.md`](docs/AI_AGENT_INTEGRATION.md).
 
 ## Development
 
