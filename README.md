@@ -1,11 +1,30 @@
 # @agentmeshkit/oauth-codex
 
-Safe TypeScript utilities for Codex ChatGPT OAuth `auth.json` files.
+Safe TypeScript utilities for Codex ChatGPT OAuth `auth.json` files and
+`chatgpt.com` backend API calls.
 
 The package reads both native Codex nested auth files and flat imported auth
 fixtures, refreshes access tokens through caller-injected `fetch`, writes
 `auth.json` atomically with `0600` permissions, and exposes redacted diagnostics
 for AgentMeshKit runtimes.
+
+## Package Scope
+
+Although the package name is `oauth-codex`, this package is now a client
+toolkit for using Codex OAuth credentials with `chatgpt.com` backend APIs. It
+provides:
+
+- OAuth token management with `createCodexAuthManager`.
+- Credential file reads and atomic writes with `readCodexAuthFile` and
+  `writeCodexAuthFile`.
+- Standard backend request helpers with `fetchWithCodexAuth` and
+  `buildCodexBackendHeaders`.
+- Responses API SSE parsing with `parseCodexResponsesStream` and
+  `collectCodexResponsesText`.
+- Quota/status querying with `fetchCodexQuotaSnapshot`.
+
+Protocol risk: `https://chatgpt.com/backend-api/*` is not a public OpenAI API
+contract and may change. Keep downstream callers prepared for protocol drift.
 
 ## Install
 
@@ -42,6 +61,44 @@ import { fetchCodexQuotaSnapshot } from '@agentmeshkit/oauth-codex';
 const quota = await fetchCodexQuotaSnapshot({ auth, fetch });
 ```
 
+To call the Codex Responses endpoint, use the standard authenticated fetch
+helper and parse the SSE body:
+
+```ts
+import {
+  CHATGPT_RESPONSES_URL,
+  collectCodexResponsesText,
+  createCodexAuthManager,
+  fetchWithCodexAuth,
+} from '@agentmeshkit/oauth-codex';
+
+const auth = createCodexAuthManager({ codexHome, fetch });
+const resp = await fetchWithCodexAuth({
+  auth,
+  url: CHATGPT_RESPONSES_URL,
+  init: {
+    method: 'POST',
+    body: JSON.stringify({
+      model: 'gpt-5-mini',
+      stream: true,
+      instructions: 'You generate concise session titles.',
+      input: [{ role: 'user', content: 'User question: ...\nAssistant reply: ...' }],
+    }),
+  },
+  accept: 'text/event-stream',
+  fetchImpl: fetch,
+});
+
+if (!resp.ok) throw new Error(`responses failed: ${resp.status}`);
+const title = await collectCodexResponsesText(resp.body);
+```
+
+When no `userAgent` override is provided, backend helpers resolve the Codex CLI
+version on the target machine. Precedence is `CODEX_CLI_USER_AGENT`, then
+`CODEX_CLI_VERSION`, then a lazy cached `codex --version` probe, then the
+packaged fallback `DEFAULT_CODEX_CLI_USER_AGENT`. The probe runs at most once per
+process for the default path and adds no package dependency.
+
 All network access is caller-injected through `fetch`, so unit tests can use
 fake responses and do not need live OpenAI or ChatGPT calls.
 
@@ -54,6 +111,10 @@ Most callers only need:
 - `getDefaultCodexAccountHome(accountsRoot)` or
   `getCodexAccountHome(accountsRoot, label)` to resolve a Codex home directory.
 - `createCodexAuthManager({ codexHome, fetch })` to read and refresh tokens.
+- `fetchWithCodexAuth({ auth, url, fetchImpl })` for standard
+  `chatgpt.com/backend-api/*` requests with one 401 refresh retry.
+- `collectCodexResponsesText(resp.body)` to aggregate final message text from
+  Responses API `response.output_item.done` events.
 - `fetchCodexQuotaSnapshot({ auth, fetch })` to normalize quota data.
 
 Lower-level helpers are available for importers and diagnostics:
@@ -61,6 +122,12 @@ Lower-level helpers are available for importers and diagnostics:
 - `readCodexAuthFile(codexHome)` normalizes supported `auth.json` shapes.
 - `writeCodexAuthFile(codexHome, tokens)` writes nested Codex auth atomically.
 - `refreshAccessToken(refreshToken, { fetch })` performs a single refresh.
+- `buildCodexBackendHeaders(...)` builds Codex CLI-compatible backend headers.
+- `resolveDefaultCodexCliUserAgent(...)`, `detectCodexCliVersion(...)`,
+  `parseCodexCliVersion(...)`, and `buildCodexCliUserAgent(...)` support
+  target-machine Codex CLI user-agent resolution.
+- `parseCodexResponsesStream(body)` yields typed SSE events from Responses API
+  streams.
 - `redactAuthJson(value)` and `sanitizeErrorMessage(message, secrets)` prepare
   diagnostic output without token material.
 - `decodeCodexTokenMetadata(...)` and related decode helpers parse unverified

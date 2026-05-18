@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -6,7 +7,14 @@ export const OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 export const OAUTH_TOKEN_URL_FOR_CODE_EXCHANGE = OAUTH_TOKEN_URL;
 export const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 export const CHATGPT_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
+export const FALLBACK_CODEX_CLI_VERSION = '0.130.0';
+export const DEFAULT_CODEX_CLI_USER_AGENT =
+  `codex_cli_rs/${FALLBACK_CODEX_CLI_VERSION} (Mac OS 26.3.1; arm64) iTerm.app/3.6.9`;
+export const DEFAULT_CODEX_ORIGINATOR = 'codex_cli_rs';
+export const CHATGPT_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
 export const DEFAULT_CODEX_ACCOUNT_LABEL = 'default';
+
+const CODEX_CLI_USER_AGENT_SUFFIX = ' (Mac OS 26.3.1; arm64) iTerm.app/3.6.9';
 
 const JWT_CLAIM_PATH = 'https://api.openai.com/auth';
 const DEFAULT_REFRESH_WINDOW_MS = 60_000;
@@ -65,6 +73,40 @@ export type CodexAuthManager = {
   getPlan(): string | undefined;
 };
 
+export interface BuildCodexBackendHeadersInput {
+  accessToken: string;
+  accountId?: string;
+  userAgent?: string;
+  originator?: string;
+  sessionId?: string;
+  accept?: 'application/json' | 'text/event-stream';
+  extra?: Record<string, string>;
+}
+
+export interface FetchWithCodexAuthOptions {
+  auth: CodexAuthManager;
+  url: string;
+  init?: RequestInit;
+  retryOnUnauthorized?: boolean;
+  userAgent?: string;
+  originator?: string;
+  sessionId?: string;
+  accept?: 'application/json' | 'text/event-stream';
+  extraHeaders?: Record<string, string>;
+  fetchImpl?: FetchLike;
+}
+
+export interface CodexSSEEvent {
+  type: string;
+  data: Record<string, unknown>;
+}
+
+export interface ResolveDefaultCodexCliUserAgentOptions {
+  env?: NodeJS.ProcessEnv;
+  codexCommand?: string;
+  fallbackUserAgent?: string;
+}
+
 type RawAuthFile = Record<string, unknown> & {
   auth_mode?: unknown;
   type?: unknown;
@@ -90,6 +132,234 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+let cachedDefaultCodexCliUserAgent: string | undefined;
+
+export function parseCodexCliVersion(output: string): string | undefined {
+  return output.match(/\b(?:codex-cli|codex)\s+([0-9]+(?:\.[0-9]+){1,2}(?:[-+][^\s]+)?)/i)?.[1];
+}
+
+export function buildCodexCliUserAgent(version: string): string {
+  return `codex_cli_rs/${version}${CODEX_CLI_USER_AGENT_SUFFIX}`;
+}
+
+export function detectCodexCliVersion(
+  opts: Pick<ResolveDefaultCodexCliUserAgentOptions, 'env' | 'codexCommand'> = {},
+): string | undefined {
+  const env = opts.env ?? process.env;
+  const envVersion = stringValue(env.CODEX_CLI_VERSION);
+  if (envVersion) return envVersion;
+
+  try {
+    const output = execFileSync(opts.codexCommand ?? 'codex', ['--version'], {
+      encoding: 'utf8',
+      env,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1000,
+    });
+    return parseCodexCliVersion(output);
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveDefaultCodexCliUserAgent(
+  opts: ResolveDefaultCodexCliUserAgentOptions = {},
+): string {
+  const shouldUseCache = !opts.env && !opts.codexCommand && !opts.fallbackUserAgent;
+  if (shouldUseCache && cachedDefaultCodexCliUserAgent) return cachedDefaultCodexCliUserAgent;
+
+  const env = opts.env ?? process.env;
+  const envUserAgent = stringValue(env.CODEX_CLI_USER_AGENT);
+  const detectedVersion = envUserAgent
+    ? undefined
+    : detectCodexCliVersion({ env, codexCommand: opts.codexCommand });
+  const userAgent =
+    envUserAgent ??
+    (detectedVersion
+      ? buildCodexCliUserAgent(detectedVersion)
+      : (opts.fallbackUserAgent ?? DEFAULT_CODEX_CLI_USER_AGENT));
+
+  if (shouldUseCache && !envUserAgent) cachedDefaultCodexCliUserAgent = userAgent;
+  return userAgent;
+}
+
+function setHeader(headers: Record<string, string>, name: string, value: string): void {
+  const existing = Object.keys(headers).find((key) => key.toLowerCase() === name.toLowerCase());
+  if (existing && existing !== name) delete headers[existing];
+  headers[name] = value;
+}
+
+function getHeader(headers: Record<string, string>, name: string): string | undefined {
+  const key = Object.keys(headers).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key ? headers[key] : undefined;
+}
+
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  return Object.keys(headers).some((candidate) => candidate.toLowerCase() === name.toLowerCase());
+}
+
+function headersInitToRecord(headers: HeadersInit | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!headers) return out;
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    headers.forEach((value, key) => {
+      setHeader(out, key, value);
+    });
+    return out;
+  }
+  if (Array.isArray(headers)) {
+    for (const [key, value] of headers) {
+      setHeader(out, key, value);
+    }
+    return out;
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    setHeader(out, key, value);
+  }
+  return out;
+}
+
+export function buildCodexBackendHeaders(input: BuildCodexBackendHeadersInput): Record<string, string> {
+  const headers: Record<string, string> = {};
+  setHeader(headers, 'Authorization', `Bearer ${input.accessToken}`);
+  setHeader(headers, 'Content-Type', 'application/json');
+  setHeader(headers, 'User-Agent', input.userAgent ?? resolveDefaultCodexCliUserAgent());
+  setHeader(headers, 'Originator', input.originator ?? DEFAULT_CODEX_ORIGINATOR);
+  setHeader(headers, 'Accept', input.accept ?? 'application/json');
+  if (input.accountId) setHeader(headers, 'Chatgpt-Account-Id', input.accountId);
+
+  for (const [key, value] of Object.entries(input.extra ?? {})) {
+    setHeader(headers, key, value);
+  }
+
+  if (input.sessionId && !hasHeader(headers, 'Session_id')) {
+    setHeader(headers, 'Session_id', input.sessionId);
+  } else if (!hasHeader(headers, 'Session_id') && getHeader(headers, 'User-Agent')?.includes('Mac OS')) {
+    setHeader(headers, 'Session_id', crypto.randomUUID());
+  }
+
+  return headers;
+}
+
+export async function fetchWithCodexAuth(opts: FetchWithCodexAuthOptions): Promise<Response> {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  if (!fetchImpl) throw new Error('fetch implementation is required for Codex backend requests');
+
+  const doFetch = async (accessToken: string): Promise<Response> => {
+    const initHeaders = headersInitToRecord(opts.init?.headers);
+    const backendHeaders = buildCodexBackendHeaders({
+      accessToken,
+      accountId: opts.auth.getAccountId(),
+      userAgent: opts.userAgent,
+      originator: opts.originator,
+      sessionId: opts.sessionId,
+      accept: opts.accept,
+      extra: opts.extraHeaders,
+    });
+    const headers = { ...initHeaders };
+    for (const [key, value] of Object.entries(backendHeaders)) {
+      setHeader(headers, key, value);
+    }
+
+    const { headers: _headers, ...initWithoutHeaders } = opts.init ?? {};
+    return fetchImpl(opts.url, {
+      ...initWithoutHeaders,
+      headers,
+    });
+  };
+
+  const first = await doFetch(await opts.auth.getAccessToken());
+  if (first.status !== 401 || opts.retryOnUnauthorized === false) return first;
+
+  const refreshedToken = await opts.auth.refresh();
+  return doFetch(refreshedToken);
+}
+
+export async function* parseCodexResponsesStream(
+  body: ReadableStream<Uint8Array> | null,
+): AsyncIterable<CodexSSEEvent> {
+  if (!body) return;
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+
+  async function* consumeLine(rawLine: string): AsyncIterable<CodexSSEEvent> {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+    if (!line.startsWith('data:')) return;
+
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') return;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(payload) as unknown;
+    } catch (err) {
+      console.warn(`skipping malformed Codex SSE data line: ${errorMessage(err)}`);
+      return;
+    }
+    if (!isRecord(parsed) || typeof parsed.type !== 'string') return;
+
+    const { type, ...data } = parsed;
+    yield { type, data };
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      const lines = buffered.split('\n');
+      buffered = lines.pop() ?? '';
+
+      for (const line of lines) {
+        for await (const event of consumeLine(line)) {
+          yield event;
+          if (event.type === 'response.completed') return;
+        }
+      }
+    }
+
+    buffered += decoder.decode();
+    if (buffered) {
+      for await (const event of consumeLine(buffered)) {
+        yield event;
+        if (event.type === 'response.completed') return;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export async function collectCodexResponsesText(
+  body: ReadableStream<Uint8Array> | null,
+): Promise<string> {
+  const parts: string[] = [];
+  let completed = false;
+
+  for await (const event of parseCodexResponsesStream(body)) {
+    if (event.type === 'response.output_item.done') {
+      const item = isRecord(event.data.item) ? event.data.item : undefined;
+      if (item?.type !== 'message' || !Array.isArray(item.content)) continue;
+      for (const content of item.content) {
+        if (!isRecord(content) || content.type !== 'output_text') continue;
+        const text = stringValue(content.text);
+        if (text !== undefined) parts.push(text);
+      }
+      continue;
+    }
+
+    if (event.type === 'response.completed') {
+      completed = true;
+      break;
+    }
+  }
+
+  if (!completed) throw new Error('codex responses stream closed before completed');
+  return parts.join('');
 }
 
 export function getCodexAuthFilePath(codexHome: string): string {
@@ -589,12 +859,12 @@ export async function fetchCodexQuotaSnapshot(opts: {
   if (!accessToken) throw new Error('access token is required for Codex quota requests');
   const accountId = opts.accountId ?? opts.auth?.getAccountId();
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${accessToken}`,
-    'User-Agent': 'CodexBar',
-    Accept: 'application/json',
-  };
-  if (accountId) headers['ChatGPT-Account-Id'] = accountId;
+  const headers = buildCodexBackendHeaders({
+    accessToken,
+    accountId,
+    userAgent: 'CodexBar',
+    accept: 'application/json',
+  });
 
   const resp = await fetchImpl(CHATGPT_USAGE_URL, { method: 'GET', headers });
   if (!resp.ok) {
