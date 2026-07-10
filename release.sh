@@ -10,7 +10,8 @@ Usage:
   ./release.sh <patch|minor|major|X.Y.Z> [--publish]
   ./release.sh --help
 
-Without --publish, the script runs install, typecheck, tests, build, and a
+Without --publish, the script ensures dependencies are present, then runs
+typecheck, tests, build, and a
 package dry-run without changing the version. Add --publish to bump the
 version, commit and push main, publish to GitHub Packages, and verify it.
 USAGE
@@ -90,10 +91,10 @@ target_version="$(next_version "$current_version" "$version_spec")"
 printf 'Package: %s\nCurrent: %s\nTarget:  %s\n' \
   "$package_name" "$current_version" "$target_version"
 
-if [[ -d node_modules/.pnpm ]] && command -v pnpm >/dev/null 2>&1; then
-  CI=true pnpm install --lockfile=false
-else
+if [[ ! -d node_modules ]]; then
   CI=true npm install --no-package-lock
+else
+  printf 'Dependencies already installed; keeping the existing dependency tree.\n'
 fi
 npm run typecheck
 CI=true npm test
