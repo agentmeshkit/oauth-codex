@@ -90,7 +90,11 @@ target_version="$(next_version "$current_version" "$version_spec")"
 printf 'Package: %s\nCurrent: %s\nTarget:  %s\n' \
   "$package_name" "$current_version" "$target_version"
 
-CI=true npm install --no-package-lock
+if [[ -d node_modules/.pnpm ]] && command -v pnpm >/dev/null 2>&1; then
+  CI=true pnpm install --lockfile=false
+else
+  CI=true npm install --no-package-lock
+fi
 npm run typecheck
 CI=true npm test
 npm run build
