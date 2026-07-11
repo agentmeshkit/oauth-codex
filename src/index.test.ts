@@ -434,6 +434,21 @@ describe('Codex CLI user agent resolution', () => {
     ).toBe('custom-target-ua');
   });
 
+  it('honors process environment overrides after default detection is cached', () => {
+    delete process.env.CODEX_CLI_USER_AGENT;
+    delete process.env.CODEX_CLI_VERSION;
+    resolveDefaultCodexCliUserAgent();
+
+    process.env.CODEX_CLI_USER_AGENT = 'cached-process-override';
+    expect(resolveDefaultCodexCliUserAgent()).toBe('cached-process-override');
+
+    delete process.env.CODEX_CLI_USER_AGENT;
+    process.env.CODEX_CLI_VERSION = '9.8.7';
+    expect(resolveDefaultCodexCliUserAgent()).toBe(
+      'codex_cli_rs/9.8.7 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9',
+    );
+  });
+
   it('falls back to the packaged default when codex cannot be detected', () => {
     expect(
       resolveDefaultCodexCliUserAgent({

@@ -167,11 +167,13 @@ export function detectCodexCliVersion(
 export function resolveDefaultCodexCliUserAgent(
   opts: ResolveDefaultCodexCliUserAgentOptions = {},
 ): string {
-  const shouldUseCache = !opts.env && !opts.codexCommand && !opts.fallbackUserAgent;
-  if (shouldUseCache && cachedDefaultCodexCliUserAgent) return cachedDefaultCodexCliUserAgent;
-
   const env = opts.env ?? process.env;
   const envUserAgent = stringValue(env.CODEX_CLI_USER_AGENT);
+  const envVersion = stringValue(env.CODEX_CLI_VERSION);
+  const shouldUseCache =
+    !opts.env && !opts.codexCommand && !opts.fallbackUserAgent && !envUserAgent && !envVersion;
+  if (shouldUseCache && cachedDefaultCodexCliUserAgent) return cachedDefaultCodexCliUserAgent;
+
   const detectedVersion = envUserAgent
     ? undefined
     : detectCodexCliVersion({ env, codexCommand: opts.codexCommand });
@@ -181,7 +183,7 @@ export function resolveDefaultCodexCliUserAgent(
       ? buildCodexCliUserAgent(detectedVersion)
       : (opts.fallbackUserAgent ?? DEFAULT_CODEX_CLI_USER_AGENT));
 
-  if (shouldUseCache && !envUserAgent) cachedDefaultCodexCliUserAgent = userAgent;
+  if (shouldUseCache) cachedDefaultCodexCliUserAgent = userAgent;
   return userAgent;
 }
 
