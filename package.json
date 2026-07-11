@@ -1,6 +1,6 @@
 {
   "name": "@agentmeshkit/oauth-codex",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "type": "module",
   "description": "Codex OAuth credentials and chatgpt.com backend client utilities for AgentMeshKit runtimes.",
